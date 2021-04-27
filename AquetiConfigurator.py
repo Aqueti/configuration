@@ -112,7 +112,6 @@ class Configurator:
         print("Log: "+logInfo)
         fp = open( self.logFile, "w")
         fp.write( logInfo )
-        fp.close()
 
     ##
     # \brief destructor
@@ -419,6 +418,76 @@ class Configurator:
 
         #Return the result
         return sysctlInfo
+
+    ##
+    # \brief check the system name
+    # \param [in] systemName new name for the system
+    # \param [in] filename name of the configuration file.
+    # \return True on success, False on failure
+    #
+    def checkSystemName(self, filename="/etc/aqueti/daemonConfiguration.json"):
+        info = {"valid":[],"invalid":[]}
+
+        #check for sudo access
+        if not CommandParser.checkSudo():
+            print("ERROR: sudo access required to change firewall.")
+            return False
+
+
+        config = FileInterface.readJson( filename )
+
+        try:
+            info["valid"] = {"system":config["directoryOfServices"]["system"]}
+            
+        except:
+            msg = "ERROR: invalid system entry in "+filename
+            invalid[{"system":"invalid"}]
+
+        return info
+ 
+            
+    ##
+    # \brief change the system name
+    # \param [in] systemName new name for the system
+    # \param [in] filename name of the configuration file.
+    # \return True on success, False on failure
+    #
+    def changeSystemName(self, systemName, filename="/etc/aqueti/daemonConfiguration.json"):
+        print("Changing system name to "+systemName)
+        #check for sudo access
+        if not CommandParser.checkSudo():
+            print("ERROR: sudo access required to change firewall.")
+            return False
+
+
+        #Read the configuration file
+        config = FileInterface.readJson( filename )
+
+        #Try to change. If failure, there is an issue with the config file
+        try:
+            print("Config: "+str(config))
+            if config["directoryOfServices"]["system"] == systemName:
+                print("No name changes required")
+                return True
+            else:
+                config["directoryOfServices"]["system"] = systemName
+                print("New config: "+json.dumps(config))
+        except:
+            print("ERROR: Unable to change system name. Could be due to corrupted file: "+filename)
+            return False
+
+        #Write File
+        try:
+            print("Writing: "+json.dumps(config, indent=4))
+            FileInterface.writeJson( config, filename )
+          
+        except:
+            print("ERROR: Unable to write configuration file: "+filename)
+            return False
+
+        return True
+
+                
 
     ##
     # \brief changes the firewall settings
@@ -1136,6 +1205,8 @@ class Configurator:
             print("Sudo access needed for changeHostsFile")
             return nvInfo 
 
+        #Make sure we have an nVidia card
+
         #See if a change is needed
         result = self.checkNVidia()
         if result["pass"]:
@@ -1316,9 +1387,15 @@ class Configurator:
         daemonInfo = {"pass":False, "valid":[],"invalid":[]}
 
         info = FileInterface.readJson( filename )
-        if info == False:
-            print("ERROR: Unable to read daemonConfiguration file: "+str(filename))
-            daemonInfo["pass"] = False
+        try:
+            if info == False:
+                print("ERROR: Unable to read daemonConfiguration file: "+str(filename))
+                daemonInfo["pass"] = False
+                return daemonInfo
+
+        except:
+            print("ERROR: AquetiDaemon may not be installed")
+
             return daemonInfo
       
 
@@ -1396,6 +1473,7 @@ def test(verbose = 0):
 
     testResult["data"] = {}
     testResult["firewall"] = {"pass":True, "errors":[], "warnings":[]}
+    testResult["systemName"] = {"pass":True, "errors":[], "warnings":[]}
 
 
     #############################################
@@ -1443,18 +1521,99 @@ def test(verbose = 0):
                 testResult["firewall"]["pass"] = False
                 testResult["pass"] = False
 
+    #############################################
+    # Check set system
+    #############################################
+    #Record initial system name
+    cmd = "sudo ./AquetiConfigurator.py depends.json -checkSystem |tail -n 1"
+    result = CommandParser.runCommand(cmd)
+    if result["returnCode"]:
+        print("RESULT: "+json.dumps(result, indent=4))
+        msg = "Unable to execute command: "+cmd
+        testResult["systemName"]["errors"].append(msg)
+        testResult["systemName"]["pass"] = False
+        testResult["pass"] = False
 
-           
-
-
-        
-       
-        
-         
+    else:
+        try:
+            systemInfo = json.loads(result["value"])
+        except:
+            msg = "Unable to convert return to dictionary for command "+cmd
+            testResult["systemName"]["errors"].append(msg)
+            testResult["systemName"]["pass"] = False
+            testResult["pass"] = False
     
 
 
-  
+    if testResult["systemName"]["pass"]:
+        try:
+            name = systemInfo["valid"]["system"]
+        except:
+            msg = "Invalid system name in config file"
+            testResult["systemName"]["errors"].append(msg)
+            testResult["systemName"]["pass"] = False
+            testResult["pass"] = False
+
+    if testResult["systemName"]["pass"]:
+        #Change to a new name
+        name2 = name + "_test"
+        cmd = "sudo ./AquetiConfigurator.py depends.json -changeSystem "+name2
+        result = CommandParser.runCommand(cmd)
+        if result["returnCode"]:
+            print("RETURN: "+json.dumps(result, indent=4))
+            msg = "Unable to execute command:: "+cmd
+            testResult["systemName"]["errors"].append(msg)
+            testResult["systemName"]["pass"] = False
+            testResult["pass"] = False
+
+    #Check new name
+    if testResult["systemName"]["pass"]:
+        cmd = "sudo ./AquetiConfigurator.py depends.json -checkSystem |tail -n 1"
+        result = CommandParser.runCommand(cmd)
+        if result["returnCode"]:
+            msg = "Unable to execute command - "+cmd
+            testResult["systemName"]["errors"].append(msg)
+            testResult["systemName"]["pass"] = False
+            testResult["pass"] = False
+
+        else:
+            try:
+                systemInfo = json.loads(result["value"])
+            except:
+                msg = "Unable to convert return to dictionary for command "+cmd
+                testResult["systemName"]["errors"].append(msg)
+                testResult["systemName"]["pass"] = False
+                testResult["pass"] = False
+
+        if testResult["systemName"]["pass"]:
+            try:
+                if systemInfo["valid"]["system"] != name2:
+                   msg = "Unable to change system name to "+name2
+                   testResult["systemName"]["errors"].append(msg)
+                   testResult["systemName"]["pass"] = False
+                   testResult["pass"] = False
+            except:
+                msg = "Error with changed file"
+                testResult["systemName"]["errors"].append(msg)
+                testResult["systemName"]["pass"] = False
+                testResult["pass"] = False
+
+        else:
+            print("Failed to change name")
+
+        #Change to previous name
+        cmd = "./AquetiConfigurator.py depends.json -changeSystem "+name
+        result = CommandParser.runCommand(cmd)
+
+        return testResult
+
+        if result["returnCode"]:
+            msg = "Unable to execute command "+cmd
+            testResult["systemName"]["errors"].append(msg)
+            testResult["systemName"]["pass"] = False
+            testResult["pass"] = False
+
+
     return testResult
 
 ##
@@ -1481,6 +1640,8 @@ Examples:
     parser.add_argument("-checkNTP", action="store_const", dest="checkNTP", const=True, help="verifies sysctl settings")
     parser.add_argument("-checkSysctl", action="store_const", dest="checkSysctl", const=True, help="verifies sysctl settings")
     parser.add_argument("-changeSysctl", action="store", dest="changeSysctl", nargs='?', const=True, help="verifies sysctl settings")
+    parser.add_argument("-checkSystem", action="store_const", dest="checkSystem", const=True, help="verifies sysctl settings")
+    parser.add_argument("-changeSystem", action="store", dest="changeSystem", help="verifies sysctl settings")
     parser.add_argument("-checkLimits", action="store_const", dest="checkLimits", const=True, help="verifies sysctl settings")
     parser.add_argument("-changeLimits", action="store", dest="changeLimits", nargs='?', const=True, help="verifies sysctl settings")
     parser.add_argument("-checkHostsFile", action="store_const", dest="checkHosts", const=True, help="checks the /etc/hosts file")
@@ -1491,6 +1652,8 @@ Examples:
     parser.add_argument("-checkNVidia", action="store_const", dest="checkNVidia", const=True, help="checks the firewall status")
     parser.add_argument("-changeNVidia", action="store_const", dest="changeNVidia", const=True, help="changes the firewall status")
     parser.add_argument("-dpkgPath", action="store", dest="dpkgPath", help="path to dpkg files to install")
+
+
     parser.add_argument("-v", action="store_const", dest="verbose", const=True, help="Verbose output")
     parser.add_argument("-test", action="store_const", dest="test", const=True, help="Run Unit test")
     args = parser.parse_args()
@@ -1559,7 +1722,6 @@ Examples:
     if args.changeNVidia:
         info = configurator.changeNVidia()
  
-
     if args.changeSysctl:
         #If we're a boolean, no values provided
         if isinstance( args.changeSysctl, bool):
@@ -1758,6 +1920,8 @@ Examples:
                 print("daemonConfig is valid")
             else:
                 print("daemonConfig is not valid")
+                print(json.dumps(info["invalid"]))
+
 
 
     if args.disableFirewall:
@@ -1782,8 +1946,15 @@ Examples:
             else:
                 print("firewall is not valid")
 
+    if args.changeSystem:
+        print("Changing system to "+args.changeSystem)
+        result = configurator.changeSystemName(args.changeSystem)
 
+        print("Result: "+str(result))
 
+    if args.checkSystem:
+        result = configurator.checkSystemName()
+        print("Result:\n"+json.dumps(result))
               
 
 #    print(json.dumps( checkInfo, indent=4))
